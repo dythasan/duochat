@@ -1,0 +1,44 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  username  String   @unique
+  password  String
+  createdAt DateTime @default(now())
+
+  sentMessages     Message[] @relation("SentMessages")
+  receivedMessages Message[] @relation("ReceivedMessages")
+
+  @@map("duochat_users")
+}
+
+model Message {
+  id         String      @id @default(cuid())
+  content    String?
+  imageData  String?
+  imageType  String?
+  type       MessageType @default(TEXT)
+  createdAt  DateTime    @default(now())
+  read       Boolean     @default(false)
+  readAt     DateTime?
+
+  senderId   String
+  receiverId String
+
+  sender   User @relation("SentMessages", fields: [senderId], references: [id])
+  receiver User @relation("ReceivedMessages", fields: [receiverId], references: [id])
+
+  @@map("duochat_messages")
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+}
