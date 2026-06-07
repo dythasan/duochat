@@ -46,21 +46,29 @@ export default function ChatPage() {
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const audioCtxRef = useRef<AudioContext | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
 
-  // Initialize AudioContext on first user interaction (required for iOS)
+  // Initialize audio on first user interaction (required for iOS Safari)
   useEffect(() => {
-    function initAudio() {
-      if (!audioCtxRef.current) {
-        audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)()
-      }
-      document.removeEventListener('touchstart', initAudio)
-      document.removeEventListener('click', initAudio)
+    const audio = new Audio('/sounds/notify.wav')
+    audio.preload = 'auto'
+    audio.volume = 1.0
+    audioRef.current = audio
+
+    function unlockAudio() {
+      // Play and immediately pause to unlock audio on iOS
+      audio.play().then(() => {
+        audio.pause()
+        audio.currentTime = 0
+      }).catch(() => {})
+      document.removeEventListener('touchstart', unlockAudio)
+      document.removeEventListener('click', unlockAudio)
     }
-    document.addEventListener('touchstart', initAudio)
-    document.addEventListener('click', initAudio)
+    document.addEventListener('touchstart', unlockAudio)
+    document.addEventListener('click', unlockAudio)
     return () => {
-      document.removeEventListener('touchstart', initAudio)
-      document.removeEventListener('click', initAudio)
+      document.removeEventListener('touchstart', unlockAudio)
+      document.removeEventListener('click', unlockAudio)
     }
   }, [])
 
@@ -150,44 +158,18 @@ export default function ChatPage() {
       )
     })
 
-    newSocket.on('message:receive', async (data: { message: Message }) => {
+    newSocket.on('message:receive', (data: { message: Message }) => {
       setMessages((prev) => {
         const exists = prev.find((m) => m.id === data.message.id)
         if (exists) return prev
         return [...prev, data.message]
       })
-      // Play notification sound on incoming message
+      // Play notification sound
       try {
-        const ctx = audioCtxRef.current || new (window.AudioContext || (window as any).webkitAudioContext)()
-        audioCtxRef.current = ctx
-        if (ctx.state === 'suspended') await ctx.resume()
-        
-        // Two-tone notification sound (more audible)
-        const now = ctx.currentTime
-        
-        // First tone
-        const osc1 = ctx.createOscillator()
-        const gain1 = ctx.createGain()
-        osc1.connect(gain1)
-        gain1.connect(ctx.destination)
-        osc1.frequency.value = 880
-        osc1.type = 'sine'
-        gain1.gain.setValueAtTime(0.5, now)
-        gain1.gain.exponentialRampToValueAtTime(0.01, now + 0.12)
-        osc1.start(now)
-        osc1.stop(now + 0.12)
-        
-        // Second tone (higher pitch, slight delay)
-        const osc2 = ctx.createOscillator()
-        const gain2 = ctx.createGain()
-        osc2.connect(gain2)
-        gain2.connect(ctx.destination)
-        osc2.frequency.value = 1320
-        osc2.type = 'sine'
-        gain2.gain.setValueAtTime(0.5, now + 0.13)
-        gain2.gain.exponentialRampToValueAtTime(0.01, now + 0.3)
-        osc2.start(now + 0.13)
-        osc2.stop(now + 0.3)
+        if (audioRef.current) {
+          audioRef.current.currentTime = 0
+          audioRef.current.play().catch(() => {})
+        }
       } catch (e) {}
       // Mark as read immediately since we're in the chat
       newSocket.emit('messages:markRead', {
