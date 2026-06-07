@@ -33,6 +33,10 @@ app.prepare().then(() => {
             methods: ['GET', 'POST'],
         },
         maxHttpBufferSize: 10 * 1024 * 1024, // 10MB for images
+        pingTimeout: 60000,
+        pingInterval: 25000,
+        transports: ['polling', 'websocket'],
+        allowUpgrades: true,
     });
     io.on('connection', (socket) => {
         console.log('Client connected:', socket.id);

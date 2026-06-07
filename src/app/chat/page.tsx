@@ -102,9 +102,12 @@ export default function ChatPage() {
     // Connect socket
     const socketUrl = window.location.origin
     const newSocket = io(socketUrl, {
-      transports: ['websocket', 'polling'],
-      reconnectionAttempts: 5,
+      transports: ['polling', 'websocket'],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000,
     })
 
     newSocket.on('connect', () => {
