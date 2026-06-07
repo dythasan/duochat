@@ -396,20 +396,7 @@ export default function ChatPage() {
         className="flex-1 overflow-y-auto px-3 py-2"
         style={{ background: '#0B141A', overscrollBehavior: 'contain' }}
       >
-        {/* Background pattern overlay */}
-        <div
-          style={{
-            position: 'fixed',
-            top: 60,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: 'url("data:image/svg+xml,%3Csvg width=\'300\' height=\'300\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Ctext x=\'50%25\' y=\'50%25\' font-size=\'100\' text-anchor=\'middle\' dominant-baseline=\'middle\' fill=\'%23ffffff08\'%3E💬%3C/text%3E%3C/svg%3E")',
-            pointerEvents: 'none',
-            zIndex: 0,
-          }}
-        />
-        <div style={{ position: 'relative', zIndex: 1 }}>
+        <div>
           {groups.map((group) => (
             <div key={group.date}>
               {/* Date separator */}
