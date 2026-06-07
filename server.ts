@@ -3,6 +3,7 @@ import { parse } from 'url'
 import next from 'next'
 import { Server as SocketIOServer, Socket } from 'socket.io'
 import { PrismaClient } from '@prisma/client'
+import webpush from 'web-push'
 
 const dev = process.env.NODE_ENV !== 'production'
 const hostname = '0.0.0.0'
@@ -13,13 +14,60 @@ const handle = app.getRequestHandler()
 
 const prisma = new PrismaClient()
 
+// Configure web-push with VAPID keys
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || ''
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || ''
+const VAPID_EMAIL = process.env.VAPID_EMAIL || 'mailto:info@duochat.app'
+
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails(VAPID_EMAIL, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY)
+} else {
+  console.warn('VAPID keys not configured — push notifications disabled')
+}
+
 interface SocketUser {
   socketId: string
   userId: string
   username: string
+  isActive: boolean // true when chat page is visible/focused
 }
 
 const connectedUsers: Map<string, SocketUser> = new Map()
+
+async function sendPushToUser(userId: string) {
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return
+  try {
+    const subscriptions = await prisma.pushSubscription.findMany({
+      where: { userId },
+    })
+    const payload = JSON.stringify({
+      title: 'Not',
+      body: 'Yeni mesaj',
+      url: '/chat',
+    })
+    for (const sub of subscriptions) {
+      try {
+        await webpush.sendNotification(
+          {
+            endpoint: sub.endpoint,
+            keys: { p256dh: sub.p256dh, auth: sub.auth },
+          },
+          payload
+        )
+      } catch (err: unknown) {
+        // Remove expired/invalid subscriptions (410 = Gone)
+        const status = (err as { statusCode?: number }).statusCode
+        if (status === 410 || status === 404) {
+          await prisma.pushSubscription.delete({ where: { id: sub.id } }).catch(() => {})
+        } else {
+          console.error('Push send error:', err)
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error fetching push subscriptions:', err)
+  }
+}
 
 app.prepare().then(() => {
   const httpServer = createServer(async (req, res) => {
@@ -53,6 +101,7 @@ app.prepare().then(() => {
         socketId: socket.id,
         userId: data.userId,
         username: data.username,
+        isActive: true, // assume active on join
       })
       socket.data.userId = data.userId
       socket.data.username = data.username
@@ -108,6 +157,23 @@ app.prepare().then(() => {
       }
     })
 
+    // Track visibility state
+    socket.on('user:active', (data: { userId: string }) => {
+      const user = connectedUsers.get(data.userId)
+      if (user) {
+        user.isActive = true
+        connectedUsers.set(data.userId, user)
+      }
+    })
+
+    socket.on('user:inactive', (data: { userId: string }) => {
+      const user = connectedUsers.get(data.userId)
+      if (user) {
+        user.isActive = false
+        connectedUsers.set(data.userId, user)
+      }
+    })
+
     socket.on('message:send', async (data: {
       tempId: string
       senderId: string
@@ -144,13 +210,21 @@ app.prepare().then(() => {
           if (receiverSocket) {
             receiverSocket.emit('message:receive', { message })
 
-            // If receiver is online, mark as read immediately
-            await prisma.message.update({
-              where: { id: message.id },
-              data: { read: true, readAt: new Date() },
-            })
-            socket.emit('messages:read', { byUserId: data.receiverId })
+            // If receiver is online AND active (page visible), mark as read immediately
+            if (receiverUser.isActive) {
+              await prisma.message.update({
+                where: { id: message.id },
+                data: { read: true, readAt: new Date() },
+              })
+              socket.emit('messages:read', { byUserId: data.receiverId })
+            } else {
+              // Receiver is connected but page is hidden — send push notification
+              await sendPushToUser(data.receiverId)
+            }
           }
+        } else {
+          // Receiver is completely offline — send push notification
+          await sendPushToUser(data.receiverId)
         }
       } catch (err) {
         console.error('Error saving message:', err)

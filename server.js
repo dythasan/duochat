@@ -8,13 +8,59 @@ const url_1 = require("url");
 const next_1 = __importDefault(require("next"));
 const socket_io_1 = require("socket.io");
 const client_1 = require("@prisma/client");
+const web_push_1 = __importDefault(require("web-push"));
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = '0.0.0.0';
 const port = parseInt(process.env.PORT || '3000', 10);
 const app = (0, next_1.default)({ dev, hostname, port });
 const handle = app.getRequestHandler();
 const prisma = new client_1.PrismaClient();
+// Configure web-push with VAPID keys
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
+const VAPID_EMAIL = process.env.VAPID_EMAIL || 'mailto:info@duochat.app';
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+    web_push_1.default.setVapidDetails(VAPID_EMAIL, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+}
+else {
+    console.warn('VAPID keys not configured — push notifications disabled');
+}
 const connectedUsers = new Map();
+async function sendPushToUser(userId) {
+    if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY)
+        return;
+    try {
+        const subscriptions = await prisma.pushSubscription.findMany({
+            where: { userId },
+        });
+        const payload = JSON.stringify({
+            title: 'Not',
+            body: 'Yeni mesaj',
+            url: '/chat',
+        });
+        for (const sub of subscriptions) {
+            try {
+                await web_push_1.default.sendNotification({
+                    endpoint: sub.endpoint,
+                    keys: { p256dh: sub.p256dh, auth: sub.auth },
+                }, payload);
+            }
+            catch (err) {
+                // Remove expired/invalid subscriptions (410 = Gone)
+                const status = err.statusCode;
+                if (status === 410 || status === 404) {
+                    await prisma.pushSubscription.delete({ where: { id: sub.id } }).catch(() => { });
+                }
+                else {
+                    console.error('Push send error:', err);
+                }
+            }
+        }
+    }
+    catch (err) {
+        console.error('Error fetching push subscriptions:', err);
+    }
+}
 app.prepare().then(() => {
     const httpServer = (0, http_1.createServer)(async (req, res) => {
         try {
@@ -45,6 +91,7 @@ app.prepare().then(() => {
                 socketId: socket.id,
                 userId: data.userId,
                 username: data.username,
+                isActive: true, // assume active on join
             });
             socket.data.userId = data.userId;
             socket.data.username = data.username;
@@ -98,6 +145,21 @@ app.prepare().then(() => {
                 console.error('Error marking messages read on join:', err);
             }
         });
+        // Track visibility state
+        socket.on('user:active', (data) => {
+            const user = connectedUsers.get(data.userId);
+            if (user) {
+                user.isActive = true;
+                connectedUsers.set(data.userId, user);
+            }
+        });
+        socket.on('user:inactive', (data) => {
+            const user = connectedUsers.get(data.userId);
+            if (user) {
+                user.isActive = false;
+                connectedUsers.set(data.userId, user);
+            }
+        });
         socket.on('message:send', async (data) => {
             try {
                 const message = await prisma.message.create({
@@ -123,13 +185,23 @@ app.prepare().then(() => {
                     const receiverSocket = io.sockets.sockets.get(receiverUser.socketId);
                     if (receiverSocket) {
                         receiverSocket.emit('message:receive', { message });
-                        // If receiver is online, mark as read immediately
-                        await prisma.message.update({
-                            where: { id: message.id },
-                            data: { read: true, readAt: new Date() },
-                        });
-                        socket.emit('messages:read', { byUserId: data.receiverId });
+                        // If receiver is online AND active (page visible), mark as read immediately
+                        if (receiverUser.isActive) {
+                            await prisma.message.update({
+                                where: { id: message.id },
+                                data: { read: true, readAt: new Date() },
+                            });
+                            socket.emit('messages:read', { byUserId: data.receiverId });
+                        }
+                        else {
+                            // Receiver is connected but page is hidden — send push notification
+                            await sendPushToUser(data.receiverId);
+                        }
                     }
+                }
+                else {
+                    // Receiver is completely offline — send push notification
+                    await sendPushToUser(data.receiverId);
                 }
             }
             catch (err) {

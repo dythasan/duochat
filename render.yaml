@@ -5,7 +5,7 @@ services:
     plan: free
     region: oregon
     branch: master
-    buildCommand: npm install && npm run build
+    buildCommand: npm install && node scripts/migrate-push.js && npm run build
     startCommand: node server.js
     envVars:
       - key: NODE_ENV
@@ -13,5 +13,13 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET
+        sync: false
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_EMAIL
+        value: mailto:info@duochat.app
+      - key: NEXT_PUBLIC_VAPID_PUBLIC_KEY
         sync: false
     autoDeploy: true

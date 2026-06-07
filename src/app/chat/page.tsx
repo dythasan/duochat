@@ -5,6 +5,18 @@ import { useRouter } from 'next/navigation'
 import { io, Socket } from 'socket.io-client'
 import { USERS } from '@/lib/users'
 
+// Utility: convert base64url string to Uint8Array for VAPID public key
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const rawData = window.atob(base64)
+  const outputArray = new Uint8Array(rawData.length)
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i)
+  }
+  return outputArray
+}
+
 interface User {
   id: string
   username: string
@@ -47,6 +59,64 @@ export default function ChatPage() {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
+
+  // Register service worker and subscribe to push notifications
+  useEffect(() => {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
+
+    const token = localStorage.getItem('token')
+    if (!token) return
+
+    async function setupPush() {
+      try {
+        // Register service worker
+        const registration = await navigator.serviceWorker.register('/sw.js')
+
+        // Request notification permission
+        const permission = await Notification.requestPermission()
+        if (permission !== 'granted') return
+
+        const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
+        if (!vapidPublicKey) return
+
+        // Subscribe to push
+        const subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+        })
+
+        // Send subscription to server
+        await fetch('/api/push/subscribe', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(subscription.toJSON()),
+        })
+      } catch (err) {
+        // Silently fail — push notifications are best-effort
+        console.warn('Push setup failed:', err)
+      }
+    }
+
+    setupPush()
+  }, [])
+
+  // Track page visibility and emit user:active / user:inactive
+  useEffect(() => {
+    function handleVisibilityChange() {
+      if (!socket || !currentUser) return
+      if (document.visibilityState === 'visible') {
+        socket.emit('user:active', { userId: currentUser.id })
+      } else {
+        socket.emit('user:inactive', { userId: currentUser.id })
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [socket, currentUser])
 
   // Initialize audio on first user interaction (required for iOS Safari)
   useEffect(() => {
@@ -121,6 +191,8 @@ export default function ChatPage() {
     newSocket.on('connect', () => {
       setIsConnected(true)
       newSocket.emit('user:join', { userId: user.id, username: user.username })
+      // Tell server we're active (page visible)
+      newSocket.emit('user:active', { userId: user.id })
     })
 
     newSocket.on('disconnect', () => {
