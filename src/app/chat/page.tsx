@@ -135,6 +135,10 @@ export default function ChatPage() {
         if (exists) return prev
         return [...prev, data.message]
       })
+      // Vibrate on incoming message (mobile only, no notification)
+      if (navigator.vibrate) {
+        navigator.vibrate(200)
+      }
       // Mark as read immediately since we're in the chat
       newSocket.emit('messages:markRead', {
         byUserId: user.id,
