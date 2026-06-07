@@ -45,6 +45,24 @@ export default function ChatPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const audioCtxRef = useRef<AudioContext | null>(null)
+
+  // Initialize AudioContext on first user interaction (required for iOS)
+  useEffect(() => {
+    function initAudio() {
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)()
+      }
+      document.removeEventListener('touchstart', initAudio)
+      document.removeEventListener('click', initAudio)
+    }
+    document.addEventListener('touchstart', initAudio)
+    document.addEventListener('click', initAudio)
+    return () => {
+      document.removeEventListener('touchstart', initAudio)
+      document.removeEventListener('click', initAudio)
+    }
+  }, [])
 
   const scrollToBottom = useCallback((smooth = true) => {
     messagesEndRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'instant' })
@@ -135,10 +153,21 @@ export default function ChatPage() {
         if (exists) return prev
         return [...prev, data.message]
       })
-      // Vibrate on incoming message (mobile only, no notification)
-      if (navigator.vibrate) {
-        navigator.vibrate(200)
-      }
+      // Play short sound on incoming message (no notification)
+      try {
+        const ctx = audioCtxRef.current || new (window.AudioContext || (window as any).webkitAudioContext)()
+        if (ctx.state === 'suspended') ctx.resume()
+        const oscillator = ctx.createOscillator()
+        const gainNode = ctx.createGain()
+        oscillator.connect(gainNode)
+        gainNode.connect(ctx.destination)
+        oscillator.frequency.value = 800
+        oscillator.type = 'sine'
+        gainNode.gain.setValueAtTime(0.3, ctx.currentTime)
+        gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15)
+        oscillator.start(ctx.currentTime)
+        oscillator.stop(ctx.currentTime + 0.15)
+      } catch (e) {}
       // Mark as read immediately since we're in the chat
       newSocket.emit('messages:markRead', {
         byUserId: user.id,
