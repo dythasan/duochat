@@ -8,8 +8,8 @@ export const USERS = [
   },
   {
     id: 'user-partner-002',
-    username: 'partner',
-    password: 'partner123',
+    username: 'user',
+    password: 'user123',
   },
 ]
 
